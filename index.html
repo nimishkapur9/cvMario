@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>My CV Game</title>
+  <!-- Responsive on mobile -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+
+  <style>
+    /* Reset & page setup */
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      background: #000;
+      overflow: hidden; /* no scrollbars, Phaser handles camera */
+      font-family: sans-serif;
+    }
+
+    /* Container that holds the Phaser game */
+    #game-container {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      background: #ccc;
+    }
+
+    /* On-screen controls (bottom 25%) */
+    .controls {
+      position: absolute;
+      bottom: 0;
+      width: 100%;
+      height: 25%;
+      display: flex;
+      justify-content: space-evenly;
+      align-items: center;
+      background: rgba(255, 255, 255, 0.6);
+      z-index: 999; /* above Phaser canvas */
+    }
+    .btn {
+      width: 60px;
+      height: 60px;
+      border-radius: 10px;
+      background: #ffeb3b; /* yellow */
+      border: none;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      font-size: 1.5rem;
+      cursor: pointer;
+      user-select: none; /* prevent text highlighting */
+    }
+    .btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    /* Pop-up / modal for scrolls & “Oops!” messages */
+    .popup-overlay {
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0, 0, 0, 0.7);
+      display: none;
+      justify-content: center;
+      align-items: center;
+      z-index: 1000;
+    }
+    .popup {
+      background: #fff;
+      padding: 20px;
+      max-width: 80%;
+      border-radius: 10px;
+      text-align: center;
+    }
+    .popup h2 {
+      margin-bottom: 10px;
+    }
+    .popup p {
+      margin-bottom: 20px;
+    }
+
+    /* Final scene overlay */
+    .final-scene-overlay {
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0, 0, 0, 0.9);
+      display: none;
+      justify-content: center;
+      align-items: center;
+      z-index: 2000;
+      text-align: center;
+      color: #fff;
+      padding: 20px;
+    }
+    .final-scene-content {
+      max-width: 600px;
+    }
+    .final-btn {
+      display: inline-block;
+      margin: 10px;
+      padding: 10px 20px;
+      background: #ffeb3b;
+      color: #333;
+      text-decoration: none;
+      border-radius: 5px;
+      font-weight: bold;
+    }
+  </style>
+</head>
+
+<body>
+<!-- Phaser game renders here -->
+<div id="game-container"></div>
+
+<!-- On-screen controls (mobile + desktop click) -->
+<div class="controls">
+  <button class="btn" id="leftBtn">&#9664;</button>
+  <button class="btn" id="rightBtn">&#9654;</button>
+  <button class="btn" id="jumpBtn">&#9650;</button>
+  <button class="btn" id="pickupBtn" disabled>Pick</button>
+</div>
+
+<!-- Popup overlay for CV scrolls and “Oops!” messages -->
+<div class="popup-overlay" id="popupOverlay">
+  <div class="popup" id="popupContent"></div>
+</div>
+
+<!-- Final scene overlay (contact info) -->
+<div class="final-scene-overlay" id="finalScene">
+  <div class="final-scene-content">
+    <h1>Thanks for Playing!</h1>
+    <p>I'm seeking internships / full-time positions in Actuaries. If you liked my CV, I'd love to chat!</p>
+    <a href="https://www.linkedin.com/in/nimish-kapur-566160196/" target="_blank" class="final-btn">LinkedIn</a>
+    <a href="mailto:nimish.kapur@mail.mcgill.ca" class="final-btn">Email Me</a>
+  </div>
+</div>
+
+<!-- Phaser JS (via CDN) -->
+<script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
+<script>
+/***************************************************************************
+ *  CONFIGURE PHASER
+ ***************************************************************************/
+const config = {
+  type: Phaser.AUTO,
+  width: window.innerWidth,
+  height: window.innerHeight * 0.75, // top 75% for game
+  parent: 'game-container',
+  physics: {
+    default: 'arcade',
+    arcade: {
+      gravity: { y: 800 },
+      debug: false
+    }
+  },
+  scene: {
+    preload: preload,
+    create: create,
+    update: update
+  }
+};
+const game = new Phaser.Game(config);
+
+/***************************************************************************
+ *  GLOBAL VARIABLES
+ ***************************************************************************/
+let player;
+let platforms;
+let bombs;
+let spikes;
+let collectibleItems;
+let currentItemIndex = 0;
+let totalItems = 10;
+
+// Used to pause the game logic when a popup is open
+let popupOpen = false;
+
+// Distance threshold for enabling “Pick” button
+let pickupRange = 60;
+
+// Track which item the player is near
+let itemInRange = null;
+
+// Simple array of CV “scrolls” text
+const cvScrolls = [
+  {
+    title: 'Education',
+    text: 'McGill University, BSc in Math/Econ (CGPA: 3.15, Past year: 3.96), Scholarship details...'
+  },
+  {
+    title: 'Work Experience 1',
+    text: 'AgriBusiness Associates: Strategy Intern - Managed financial assessments, boosted ~17% revenue...'
+  },
+  {
+    title: 'Work Experience 2',
+    text: 'Freelance Tutoring: Tutored Maths, Physics, Chem, Java. Helped students achieve top 5% AISCE...'
+  },
+  {
+    title: 'Work Experience 3',
+    text: 'McGill NFP Consulting w/ McKinsey: Designed models to expand thrift store, from $850k to $3M...'
+  },
+  {
+    title: 'Work Experience 4',
+    text: 'Ziama Fashions: Analyzed profitability across 1,000 B2B counters, found high-margin mom-and-pop...'
+  },
+  {
+    title: 'Professional Exam',
+    text: 'Society of Actuaries Exam FM (Financial Math), Score: 9, August 2024...'
+  },
+  {
+    title: 'Leadership & Extracurriculars',
+    text: 'VP Events (Indian Students Association), VP Finance (South Asian Studies)...'
+  },
+  {
+    title: 'Volunteering',
+    text: 'Rotary Int’l District 3070, Mega Medical Camp, Sanitary Pad Drive...'
+  },
+  {
+    title: 'Skills & Interests',
+    text: 'Java, Python, R, C, Excel, PPT, Word. Interests: Music Mixing, Badminton, Cooking, etc.'
+  },
+  {
+    title: 'Final Wrap-Up',
+    text: 'You have now seen my entire CV. Thank you for collecting all items!'
+  }
+];
+
+// Audio (Base64-encoded short beep/wav for demonstration)
+const positiveDingSrc = "data:audio/wav;base64,UklGRi4AAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YY4AAAAA";
+const negativeDingSrc = "data:audio/wav;base64,UklGRtAAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YS4AAA==";
+let positiveDing, negativeDing;
+
+/***************************************************************************
+ *  PRELOAD: load images / sprites / audio
+ ***************************************************************************/
+function preload() {
+  // Create a simple “player” sprite (50x60, red rectangle)
+  this.textures.createCanvas('player', 50, 60);
+  let pCanvas = this.textures.get('player').getSourceImage();
+  let pCtx = pCanvas.getContext('2d');
+  pCtx.fillStyle = '#ff4444';
+  pCtx.fillRect(0, 0, 50, 60);
+
+  // Create a “platform” texture (200x30, brown)
+  this.textures.createCanvas('platform', 200, 30);
+  let platformCanvas = this.textures.get('platform').getSourceImage();
+  let platCtx = platformCanvas.getContext('2d');
+  platCtx.fillStyle = '#654321';
+  platCtx.fillRect(0, 0, 200, 30);
+
+  // Bomb texture (black square 30x30)
+  this.textures.createCanvas('bomb', 30, 30);
+  let bombCanvas = this.textures.get('bomb').getSourceImage();
+  let bombCtx = bombCanvas.getContext('2d');
+  bombCtx.fillStyle = '#000';
+  bombCtx.fillRect(0, 0, 30, 30);
+
+  // Spike texture (triangle 30x30)
+  this.textures.createCanvas('spike', 30, 30);
+  let spikeCanvas = this.textures.get('spike').getSourceImage();
+  let spikeCtx = spikeCanvas.getContext('2d');
+  spikeCtx.fillStyle = '#ccc';
+  spikeCtx.beginPath();
+  spikeCtx.moveTo(0, 30);
+  spikeCtx.lineTo(15, 0);
+  spikeCtx.lineTo(30, 30);
+  spikeCtx.closePath();
+  spikeCtx.fill();
+
+  // Item texture (green 25x25)
+  this.textures.createCanvas('item', 25, 25);
+  let itemCanvas = this.textures.get('item').getSourceImage();
+  let itemCtx = itemCanvas.getContext('2d');
+  itemCtx.fillStyle = '#0f0';
+  itemCtx.fillRect(0, 0, 25, 25);
+
+  // Big background (8000px wide) with color transitions for “zones”
+  let fullHeight = config.height;
+  this.textures.createCanvas('bg', 8000, fullHeight);
+  let bgCanvas = this.textures.get('bg').getSourceImage();
+  let bgCtx = bgCanvas.getContext('2d');
+
+  // Paint entire background sky-blue
+  bgCtx.fillStyle = '#87ceeb';
+  bgCtx.fillRect(0, 0, 8000, fullHeight);
+
+  // 5 color “zones” of 1600px each, for variety
+  bgCtx.fillStyle = '#b3e2cd'; // zone 1
+  bgCtx.fillRect(0, 0, 1600, fullHeight);
+
+  bgCtx.fillStyle = '#fef9b7'; // zone 2
+  bgCtx.fillRect(1600, 0, 1600, fullHeight);
+
+  bgCtx.fillStyle = '#cee3f8'; // zone 3
+  bgCtx.fillRect(3200, 0, 1600, fullHeight);
+
+  bgCtx.fillStyle = '#ffe7de'; // zone 4
+  bgCtx.fillRect(4800, 0, 1600, fullHeight);
+
+  bgCtx.fillStyle = '#dcd0ff'; // zone 5
+  bgCtx.fillRect(6400, 0, 1600, fullHeight);
+
+  // Load our audio
+  positiveDing = new Audio(positiveDingSrc);
+  negativeDing = new Audio(negativeDingSrc);
+}
+
+/***************************************************************************
+ *  CREATE: set up the level, player, objects, collisions, camera
+ ***************************************************************************/
+function create() {
+  // 1) Add the big background
+  const bg = this.add.image(0, 0, 'bg').setOrigin(0,0);
+  bg.setScrollFactor(1);
+
+  // 2) Make the world boundaries match the background
+  this.physics.world.setBounds(0, 0, 8000, config.height);
+
+  // 3) Create platforms (static group)
+  platforms = this.physics.add.staticGroup();
+  const floorY = config.height - 30; // floor is near bottom
+
+  // Create a “floor” across entire 8000px
+  for (let x=0; x<8000; x+=200) {
+    // place segments of platform
+    platforms.create(x, floorY, 'platform').setOrigin(0,0);
+  }
+
+  // Some elevated platforms for fun
+  platforms.create(600, floorY - 100, 'platform');
+  platforms.create(1400, floorY - 150, 'platform');
+  platforms.create(2200, floorY - 100, 'platform');
+  platforms.create(3000, floorY - 180, 'platform');
+  platforms.create(3800, floorY - 120, 'platform');
+  platforms.create(4800, floorY - 100, 'platform');
+  platforms.create(5600, floorY - 150, 'platform');
+  platforms.create(6300, floorY - 120, 'platform');
+  platforms.create(7200, floorY - 180, 'platform');
+
+  // 4) Create player
+  player = this.physics.add.sprite(100, floorY - 60, 'player');
+  player.setCollideWorldBounds(true);
+  this.physics.add.collider(player, platforms);
+
+  // 5) Camera follows player
+  this.cameras.main.setBounds(0,0, 8000, config.height);
+  this.cameras.main.startFollow(player, true, 0.05, 0.05);
+
+  // 6) Create collectible items
+  collectibleItems = this.physics.add.group();
+  // Positions for 10 items
+  let itemPositions = [
+    [400, floorY-80],
+    [1200, floorY-130],
+    [2000, floorY-80],
+    [2800, floorY-160],
+    [3500, floorY-100],
+    [4200, floorY-80],
+    [5000, floorY-100],
+    [5800, floorY-80],
+    [6600, floorY-110],
+    [7800, floorY-160],
+  ];
+  for (let i=0; i<totalItems; i++){
+    let itm = collectibleItems.create(itemPositions[i][0], itemPositions[i][1], 'item');
+    itm.setImmovable(true);
+  }
+  this.physics.add.overlap(player, collectibleItems, (pl, itm)=>{
+    // if close enough, enable pick button
+    let dist = Phaser.Math.Distance.Between(pl.x, pl.y, itm.x, itm.y);
+    if (dist < pickupRange){
+      document.getElementById('pickupBtn').disabled = false;
+      itemInRange = itm;
+    }
+  });
+
+  // 7) Bombs
+  bombs = this.physics.add.group();
+  bombs.create(900, floorY-30, 'bomb').setImmovable(true);
+  bombs.create(2500, floorY-30, 'bomb').setImmovable(true);
+  bombs.create(4300, floorY-30, 'bomb').setImmovable(true);
+  this.physics.add.collider(bombs, platforms);
+  this.physics.add.overlap(player, bombs, bombCollision, null, this);
+
+  // 8) Spikes
+  spikes = this.physics.add.group();
+  spikes.create(1700, floorY-30, 'spike').setImmovable(true);
+  spikes.create(3400, floorY-30, 'spike').setImmovable(true);
+  spikes.create(7000, floorY-30, 'spike').setImmovable(true);
+  this.physics.add.collider(spikes, platforms);
+  this.physics.add.overlap(player, spikes, spikeCollision, null, this);
+
+  // 9) Setup on-screen control button logic
+  setupControls(this);
+}
+
+/***************************************************************************
+ *  UPDATE: game loop - handle movement
+ ***************************************************************************/
+function update() {
+  // If a popup is open, freeze the player
+  if (popupOpen) {
+    player.setVelocityX(0);
+    return;
+  }
+
+  let velocityX = 0;
+  // Move left / right
+  if (window.moveLeftActive) {
+    velocityX = -200;
+    player.flipX = true;
+  } else if (window.moveRightActive) {
+    velocityX = 200;
+    player.flipX = false;
+  }
+  player.setVelocityX(velocityX);
+
+  // Jump if jump is pressed & on ground
+  if (window.jumpActive && player.body.touching.down) {
+    player.setVelocityY(-450);
+  }
+}
+
+/***************************************************************************
+ *  CONTROLS SETUP
+ ***************************************************************************/
+function setupControls(scene) {
+  window.moveLeftActive = false;
+  window.moveRightActive = false;
+  window.jumpActive = false;
+
+  let leftBtn = document.getElementById('leftBtn');
+  let rightBtn = document.getElementById('rightBtn');
+  let jumpBtn = document.getElementById('jumpBtn');
+  let pickupBtn = document.getElementById('pickupBtn');
+
+  // Left
+  leftBtn.addEventListener('mousedown', ()=>{ window.moveLeftActive = true; });
+  leftBtn.addEventListener('touchstart', (e)=>{ e.preventDefault(); window.moveLeftActive = true; });
+  leftBtn.addEventListener('mouseup', ()=>{ window.moveLeftActive = false; });
+  leftBtn.addEventListener('touchend', ()=>{ window.moveLeftActive = false; });
+
+  // Right
+  rightBtn.addEventListener('mousedown', ()=>{ window.moveRightActive = true; });
+  rightBtn.addEventListener('touchstart', (e)=>{ e.preventDefault(); window.moveRightActive = true; });
+  rightBtn.addEventListener('mouseup', ()=>{ window.moveRightActive = false; });
+  rightBtn.addEventListener('touchend', ()=>{ window.moveRightActive = false; });
+
+  // Jump
+  jumpBtn.addEventListener('mousedown', ()=>{ window.jumpActive = true; });
+  jumpBtn.addEventListener('mouseup', ()=>{ window.jumpActive = false; });
+  jumpBtn.addEventListener('touchstart', (e)=>{ e.preventDefault(); window.jumpActive = true; });
+  jumpBtn.addEventListener('touchend', ()=>{ window.jumpActive = false; });
+
+  // Pickup
+  pickupBtn.addEventListener('click', ()=> {
+    if (itemInRange) {
+      // Good beep
+      positiveDing.currentTime = 0;
+      positiveDing.play();
+
+      // Remove item from the world
+      itemInRange.destroy();
+      itemInRange = null;
+      pickupBtn.disabled = true;
+
+      // Show CV scroll
+      showCVScroll();
+
+      // Increase difficulty
+      increaseDifficulty();
+    }
+  });
+}
+
+/***************************************************************************
+ *  BOMB / SPIKE COLLISION
+ ***************************************************************************/
+function bombCollision(player, bomb) {
+  negativeDing.currentTime = 0;
+  negativeDing.play();
+  showPopup("Oops!", `
+    You picked up a bomb! <br><br>
+    <button onclick="resumeGame()">Resume</button>
+    <button onclick="restartGame()">Start Over</button>
+    <button onclick="readAllScrolls()">Read Scrolls</button>
+  `);
+}
+
+function spikeCollision(player, spike) {
+  negativeDing.currentTime = 0;
+  negativeDing.play();
+  showPopup("Oops!", `
+    You hit the thorns! <br><br>
+    <button onclick="resumeGame()">Resume</button>
+    <button onclick="restartGame()">Start Over</button>
+    <button onclick="readAllScrolls()">Read Scrolls</button>
+  `);
+}
+
+/***************************************************************************
+ *  SHOW CV SCROLL
+ ***************************************************************************/
+function showCVScroll() {
+  if (currentItemIndex < cvScrolls.length) {
+    let s = cvScrolls[currentItemIndex];
+    showPopup(s.title, `
+      <p>${s.text}</p>
+      <button onclick="closePopup()">Close Scroll</button>
+    `);
+    currentItemIndex++;
+  } else {
+    // If all items are already collected, show final scene
+    endGame();
+  }
+}
+
+/***************************************************************************
+ *  POPUP MANAGEMENT
+ ***************************************************************************/
+function showPopup(title, bodyHTML) {
+  popupOpen = true;
+  const overlay = document.getElementById('popupOverlay');
+  const content = document.getElementById('popupContent');
+  overlay.style.display = 'flex';
+  content.innerHTML = `<h2>${title}</h2>${bodyHTML}`;
+}
+
+function closePopup() {
+  popupOpen = false;
+  document.getElementById('popupOverlay').style.display = 'none';
+  // If we just showed the last scroll, show final scene
+  if (currentItemIndex >= totalItems) {
+    endGame();
+  }
+}
+
+/***************************************************************************
+ *  BUTTON ACTIONS IN POPUPS
+ ***************************************************************************/
+function resumeGame() {
+  closePopup();
+}
+
+function restartGame() {
+  window.location.reload();
+}
+
+function readAllScrolls() {
+  // Show entire CV in one popup
+  let allText = "";
+  cvScrolls.forEach(scroll => {
+    allText += `<h2>${scroll.title}</h2><p>${scroll.text}</p>`;
+  });
+  showPopup("All CV Scrolls", `
+    <div style="text-align:left; max-height:50vh; overflow:auto;">
+      ${allText}
+    </div>
+    <button onclick="endGame()">END GAME</button>
+  `);
+}
+
+/***************************************************************************
+ *  END GAME (Show final scene with contact info)
+ ***************************************************************************/
+function endGame() {
+  closePopup();
+  document.getElementById('finalScene').style.display = 'flex';
+}
+
+/***************************************************************************
+ *  INCREASE DIFFICULTY AFTER COLLECTING ITEMS
+ ***************************************************************************/
+function increaseDifficulty() {
+  // Add an extra bomb or spike ahead of player sometimes
+  let r = Math.random();
+  if (r < 0.3) {
+    // Bomb
+    let xPos = Phaser.Math.Between(player.x+400, player.x+700);
+    if (xPos < 7500) { // don't spawn outside the world end
+      let b = bombs.create(xPos, config.height-60, 'bomb').setImmovable(true);
+      this.physics.add.collider(b, platforms);
+      this.physics.add.overlap(player, b, bombCollision, null, this);
+    }
+  } else if (r < 0.6) {
+    // Spike
+    let xPos = Phaser.Math.Between(player.x+400, player.x+700);
+    if (xPos < 7700) {
+      let sp = spikes.create(xPos, config.height-60, 'spike').setImmovable(true);
+      this.physics.add.collider(sp, platforms);
+      this.physics.add.overlap(player, sp, spikeCollision, null, this);
+    }
+  }
+}
+</script>
+</body>
+</html>
